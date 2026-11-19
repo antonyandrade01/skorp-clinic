@@ -6,6 +6,8 @@
 >
 > **Private repository notice:** This repository is the public architecture showcase for Skorp Clinic (clinical progress notes service). Source code is private while the product is in testing and development. Live demos are available on request: [antonymsandrade@gmail.com](mailto:antonymsandrade@gmail.com) or [LinkedIn](https://www.linkedin.com/in/antonyandrade01/).
 
+**No ar / Live:** [evolucao.antonyandrade.com.br](https://evolucao.antonyandrade.com.br) (app no ar; pede login / live app; requires login). Acesso de demonstração sob pedido / Demo access on request.
+
 ---
 
 ## Arquitetura / Architecture

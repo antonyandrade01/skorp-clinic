@@ -38,7 +38,7 @@ O Skorp Clinic recebe o áudio ou texto enviado pelo profissional em grupo de Wh
 
 ### Números reais
 
-- Projeto recente em homologação inicial com uso real por profissional de saúde: 2 usuários, 3 profissionais cadastrados e 10 evoluções registradas no banco.
+- Em piloto com profissionais de saúde.
 - Validado por 103 testes automatizados em Pytest cobrindo isolamento RLS, match exato de pacientes, filtro anti-alucinação, segurança de acesso e fila da camada de consolidação.
 - Estruturado em 5 migrations SQL no PostgreSQL 18 com papéis separados (`evolucao_owner` para DDL e `evolucao_app` para execução, sem permissão de `DELETE` em dados clínicos).
 
@@ -88,7 +88,7 @@ Skorp Clinic captures voice or text notes sent by clinicians in WhatsApp groups,
 
 ### Real numbers
 
-- Early-stage product in live testing with a practicing clinician: 2 users, 3 registered clinicians, and 10 recorded progress notes.
+- In a pilot with health professionals.
 - Covered by 103 automated Pytest tests spanning PostgreSQL RLS isolation, exact patient matching, Whisper hallucination filtering, panel access control, and Layer 2 queue mechanics.
 - Built on 5 SQL migrations in PostgreSQL 18 with split database roles (`evolucao_owner` for DDL and `evolucao_app` for runtime, with `DELETE` revoked on clinical records).
 

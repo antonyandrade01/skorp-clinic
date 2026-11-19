@@ -2,9 +2,9 @@
 
 [Português](#versao-em-portugues) | [English](#english-version)
 
-> **Aviso de código privado:** Este repositório é a vitrine pública de arquitetura do Skorp Clinic (módulo de evoluções clínicas). O código-fonte é privado por ser um produto em desenvolvimento e homologação. Demonstração ao vivo sob pedido: [antonymsandrade@gmail.com](mailto:antonymsandrade@gmail.com) ou [LinkedIn](https://www.linkedin.com/in/antonyandrade01/).
+> **Aviso de código privado:** Este repositório é a vitrine pública de arquitetura do Skorp Clinic (módulo de evoluções clínicas). O código-fonte é privado por ser um produto em piloto. Demonstração ao vivo sob pedido: [antonymsandrade@gmail.com](mailto:antonymsandrade@gmail.com) ou [LinkedIn](https://www.linkedin.com/in/antonyandrade01/).
 >
-> **Private repository notice:** This repository is the public architecture showcase for Skorp Clinic (clinical progress notes service). Source code is private while the product is in testing and development. Live demos are available on request: [antonymsandrade@gmail.com](mailto:antonymsandrade@gmail.com) or [LinkedIn](https://www.linkedin.com/in/antonyandrade01/).
+> **Private repository notice:** This repository is the public architecture showcase for Skorp Clinic (clinical progress notes service). Source code is private while the product is in a pilot. Live demos are available on request: [antonymsandrade@gmail.com](mailto:antonymsandrade@gmail.com) or [LinkedIn](https://www.linkedin.com/in/antonyandrade01/).
 
 **No ar / Live:** [evolucao.antonyandrade.com.br](https://evolucao.antonyandrade.com.br) (app no ar; pede login / live app; requires login). Acesso de demonstração sob pedido / Demo access on request.
 
@@ -14,15 +14,12 @@
 
 ```mermaid
 flowchart LR
-    WA["WhatsApp Clinical Groups"] --> RMQ["RabbitMQ (evolucao-fono.whatsapp)"]
-    RMQ --> WRK["Local Worker (systemd, Python)"]
-    WRK --> WH["faster-whisper (Local pt-BR + Silero VAD + Anti-Hallucination)"]
-    WH --> LLM["Cascaded LLM Runner (No Tools, Isolated Prompt)"]
+    WA["WhatsApp Clinical Groups"] --> RMQ["RabbitMQ Queue"]
+    RMQ --> WRK["Local Worker (Python / systemd)"]
+    WRK --> WH["faster-whisper (Local Audio Transcription)"]
+    WH --> LLM["LLM Structuring (Isolated Encounter Prompt)"]
     LLM --> API["FastAPI API + Jinja2 Panel (Docker / Coolify)"]
-    API --> PG["PostgreSQL 18 (Multi-Tenant + Clinic + Clinician RLS)"]
-    PG --> TRG["SQL Trigger (evo_gatilho_consolidacao)"]
-    TRG --> Q["SQL Queue (FOR UPDATE SKIP LOCKED)"]
-    Q --> WRK
+    API --> PG["PostgreSQL (Tenant, Clinic & Clinician RLS)"]
 ```
 
 ---
@@ -32,48 +29,43 @@ flowchart LR
 
 ### Problema que resolve
 
-Profissionais de saúde (como fonoaudiólogos e equipes multidisciplinares) gastam tempo fora do expediente redigindo evoluções clínicas a partir de anotações soltas ou áudios gravados logo após o atendimento. Ferramentas genéricas de IA misturam histórico antigo com o relato do dia, inventam datas ou horários e expõem prontuários sem controle estrito de acesso por clínica e por profissional.
+Profissionais de saúde, como fonoaudiólogos, gastam tempo fora do expediente escrevendo evoluções clínicas a partir de anotações soltas ou áudios gravados após o atendimento. Ferramentas genéricas de IA costumam misturar sessões antigas com o relato do dia, inventar datas ou horários e não isolam prontuários por clínica e por profissional.
 
-O Skorp Clinic recebe o áudio ou texto enviado pelo profissional em grupo de WhatsApp, transcreve localmente sem custo por minuto, estrutura a evolução clínica de forma isolada e só libera consolidação de histórico, alertas clínicos e perguntas ao prontuário depois que o profissional revisa e aprova a evolução.
-
-### Números reais
-
-- Em piloto com profissionais de saúde.
-- Validado por 103 testes automatizados em Pytest cobrindo isolamento RLS, match exato de pacientes, filtro anti-alucinação, segurança de acesso e fila da camada de consolidação.
-- Estruturado em 5 migrations SQL no PostgreSQL 18 com papéis separados (`evolucao_owner` para DDL e `evolucao_app` para execução, sem permissão de `DELETE` em dados clínicos).
+O Skorp Clinic recebe o áudio ou texto enviado em grupo de WhatsApp, transcreve localmente sem custo por minuto, estrutura a evolução do atendimento de forma isolada e deixa o registro pronto para o profissional revisar e aprovar no painel web.
 
 ### Decisões técnicas e trade-offs
 
-#### Separação rígida entre Camada 1 (ato clínico) e Camada 2 (histórico)
+#### Relato do dia isolado do histórico do paciente
 
-Na Camada 1, o prompt de estruturação recebe apenas o relato do dia, a skill da especialidade, a data e o nome do profissional. Nenhum histórico anterior do paciente entra no contexto. Essa restrição impede "alucinação regressiva", onde o modelo copia condutas de sessões passadas para o atendimento atual. A Camada 2 (histórico consolidado, card pré-atendimento, alertas clínicos, relatório circunstanciado e perguntas ao prontuário) lê exclusivamente evoluções com status `concluida`.
+Problema: quando o modelo recebe evoluções antigas junto com o áudio do dia, ele tende a copiar condutas passadas para a sessão atual.
 
-Trade-off: a estruturação inicial não completa lacunas automaticamente com dados de sessões antigas, mas garante fidelidade documental ao que realmente aconteceu no dia. Além disso, o código descarta nome, convênio e horário que o modelo citar sem respaldo no relato original, e nas perguntas ao prontuário toda afirmação precisa apontar a data real de uma sessão concluída.
+O que foi feito: o prompt de estruturação recebe apenas a transcrição do dia, o modelo da especialidade, a data e o nome do profissional. Um pós-processamento descarta nomes, convênios ou horários que o modelo citar sem aparecerem no relato original.
 
-#### Match exato de paciente e proteção contra falsos vínculos
+Trade-off: o sistema não preenche lacunas com dados de atendimentos passados, mas mantém a evolução fiel ao que aconteceu naquele dia.
 
-Ao receber um relato, o sistema vincula automaticamente o paciente apenas por correspondência exata (sem acento e sem diferença de maiúsculas) com nome completo ou apelido cadastrado. Nomes parecidos nunca são vinculados de forma automática: o relato gera um cadastro provisório e devolve uma sugestão para o profissional confirmar. O papel de banco da API não tem permissão `DELETE` em registros clínicos; substituições e mesclas apenas inativam o cadastro antigo.
+#### Vínculo exato de paciente e proteção contra exclusão
 
-Trade-off: gera um passo extra de confirmação quando o profissional dita um apelido novo, mas elimina o risco clínico e jurídico de gravar uma evolução no prontuário da pessoa errada.
+Problema: associar um relato ao paciente errado por semelhança de nome traz risco clínico e jurídico.
 
-#### Transcrição local com filtros anti-alucinação e fila transacional no PostgreSQL
+O que foi feito: o vínculo automático só acontece por correspondência exata (sem acento e sem diferença de maiúsculas) com o nome completo ou apelido cadastrado. Nomes parecidos criam um registro provisório e sugerem candidatos para confirmação humana. O papel de banco usado pela API não tem permissão de `DELETE` nas tabelas clínicas; correções e mesclas apenas inativam o cadastro antigo.
 
-O worker roda `faster-whisper` 1.2.1 localmente em CPU (`int8`, idioma fixo `pt`, `temperature=0.0`, `condition_on_previous_text=False`, Silero VAD e `hallucination_silence_threshold=2.0`), seguido de limpeza determinística de frases fantasma típicas do Whisper. Na Camada 2, um trigger SQL (`evo_gatilho_consolidacao`, `SECURITY DEFINER` com `search_path` travado) marca o paciente para consolidação sempre que uma evolução vira `concluida` ou muda de texto/paciente, e o worker consome a fila diretamente no PostgreSQL usando `FOR UPDATE SKIP LOCKED` com controle de lease e prioridade (relato do dia > pergunta/relatório > consolidação).
+Trade-off: o profissional precisa confirmar um apelido novo na primeira vez, mas evita gravar uma evolução no prontuário errado.
 
-Trade-off: transcrição em CPU local leva mais tempo do que APIs pagas em nuvem, mas mantém áudios clínicos dentro do servidor próprio e sem custo variável por token ou minuto. Usar fila em tabela SQL com `SKIP LOCKED` evita subir um segundo broker para tarefas de consolidação, mantendo a transação do trigger e a enfileiração atômicas.
+#### Transcrição local com filtro de silêncio
 
-#### Isolamento em três níveis com PostgreSQL RLS
+O worker roda `faster-whisper` localmente em CPU com detecção de voz (Silero VAD) e limpeza determinística de frases fantasma comuns quando há trechos longos de silêncio.
 
-As políticas de RLS isolam dados por `tenant_id`, `clinica_id` e profissional atribuído ao paciente. Perguntas feitas ao prontuário (`pedidos_ia`) ficam visíveis apenas para quem perguntou e somente enquanto o usuário mantiver acesso àquele paciente.
+Trade-off: transcrever em CPU leva mais tempo do que APIs pagas com GPU, mas mantém áudios clínicos dentro do próprio servidor e sem custo por minuto.
 
-### Em produção vs. em teste
+#### Isolamento em três níveis no PostgreSQL (RLS)
 
-Em produção (uso inicial em homologação):
-- Camada 1 ativa no Coolify + Cloudflare Tunnel: recebimento via RabbitMQ/WhatsApp, transcrição local com faster-whisper, estruturação isolada por skill clínica, match exato de paciente e revisão no painel web FastAPI/Jinja2.
+As políticas de RLS isolam os dados por tenant, clínica e profissional atribuído ao paciente. Pedidos feitos à IA sobre o prontuário ficam visíveis apenas para quem perguntou e somente enquanto mantiver acesso àquele paciente.
 
-Em teste (pronta em branch local, aguardando revisão final antes de publicação):
-- Camada 2 completa: consolidação assíncrona de histórico por trigger SQL, card "Antes do atendimento", alertas clínicos, minuta de relatório circunstanciado e chat com perguntas ancoradas em datas de sessões concluídas.
-- Integração futura com módulo de recepção clínica e agenda (planejado para compor a suíte Skorp Clinic).
+### O que está no ar
+
+- Em piloto inicial com profissionais de saúde em [evolucao.antonyandrade.com.br](https://evolucao.antonyandrade.com.br).
+- Recebimento de áudios e textos do WhatsApp via RabbitMQ e transcrição local com `faster-whisper`.
+- Estruturação isolada da evolução clínica por especialidade, match exato de paciente e painel web em FastAPI e Jinja2 para revisão e aprovação.
 
 ---
 
@@ -82,45 +74,40 @@ Em teste (pronta em branch local, aguardando revisão final antes de publicaçã
 
 ### Problem it solves
 
-Clinicians such as speech therapists spend unpaid time after sessions writing progress notes from scattered jottings or voice memos. Generic AI tools mix old chart history into today's session note, invent dates or times, and lack strict clinic- and clinician-level access boundaries.
+Clinicians such as speech therapists spend time after hours writing progress notes from scattered notes or voice memos recorded right after appointments. Generic AI tools often mix old chart history into today's session note, invent dates or times, and lack strict clinic- and clinician-level access boundaries.
 
-Skorp Clinic captures voice or text notes sent by clinicians in WhatsApp groups, transcribes audio locally without per-minute API fees, structures the session note in isolation, and only unlocks longitudinal summaries, clinical alerts, and chart Q&A after the clinician reviews and approves the note.
-
-### Real numbers
-
-- In a pilot with health professionals.
-- Covered by 103 automated Pytest tests spanning PostgreSQL RLS isolation, exact patient matching, Whisper hallucination filtering, panel access control, and Layer 2 queue mechanics.
-- Built on 5 SQL migrations in PostgreSQL 18 with split database roles (`evolucao_owner` for DDL and `evolucao_app` for runtime, with `DELETE` revoked on clinical records).
+Skorp Clinic receives voice or text notes sent in WhatsApp groups, transcribes audio locally without per-minute API fees, structures each session note in isolation, and prepares it for clinician review and approval in a web panel.
 
 ### Technical decisions and trade-offs
 
-#### Strict split between Layer 1 (clinical encounter) and Layer 2 (longitudinal memory)
+#### Session note structuring isolated from patient history
 
-Layer 1 structuring sends only today's note, the specialty skill prompt, the date, and the clinician's name to the LLM. Prior patient history never enters the prompt, preventing regressive hallucination where past sessions bleed into today's record. Layer 2 (consolidated history, pre-session summary card, clinical alerts, structured reports, and chart Q&A) reads strictly from records marked `concluida`.
+Problem: when an LLM sees past session notes alongside today's audio, it tends to carry old procedures into today's encounter.
 
-Trade-off: Layer 1 does not auto-fill gaps from previous visits, but guarantees every note reflects only what happened in that session. Post-processing strips any patient name, insurer, or timestamp not grounded in the raw input, and chart Q&A requires every claim to cite a real completed session date.
+What was done: the structuring prompt receives only today's transcript, the specialty template, the date, and the clinician's name. Post-processing strips any patient name, insurer, or timestamp not present in the raw input.
+
+Trade-off: the draft does not auto-fill gaps from previous visits, but keeps every note anchored strictly to what happened in that session.
 
 #### Exact patient matching and soft-inactivation only
 
-Incoming notes link automatically only on exact normalized matches (case- and accent-insensitive) against a registered full name or alias. Similar names never auto-link; instead, the system creates a provisional record and suggests candidates for human confirmation. The runtime database role has no `DELETE` privilege on clinical tables, so merges and replacements only mark old entries inactive.
+Problem: linking a note to the wrong patient based on fuzzy name similarity creates clinical and legal risk.
 
-Trade-off: clinicians must confirm new nicknames once, but the system eliminates the clinical risk of filing a note under the wrong patient.
+What was done: automatic linking runs only on exact normalized matches (case- and accent-insensitive) against a registered full name or alias. Similar names create a provisional entry and suggest candidates for human confirmation. The API database role has no `DELETE` privilege on clinical tables, so corrections and merges only mark old entries inactive.
 
-#### Local anti-hallucination transcription and PostgreSQL `SKIP LOCKED` queue
+Trade-off: clinicians have to confirm a new nickname once, but the system avoids filing a note under the wrong patient.
 
-The systemd worker runs `faster-whisper` 1.2.1 on CPU (`int8`, fixed `pt` language, `temperature=0.0`, `condition_on_previous_text=False`, Silero VAD, and `hallucination_silence_threshold=2.0`), followed by deterministic cleanup of common Whisper phantom phrases. In Layer 2, a `SECURITY DEFINER` SQL trigger (`evo_gatilho_consolidacao` with pinned `search_path`) marks patients for reconsolidation whenever a note transitions to `concluida` or changes content/patient, and the worker claims jobs via `FOR UPDATE SKIP LOCKED` with lease timeouts and priority ordering (daily notes > Q&A/reports > background consolidation).
+#### Local audio transcription with silence filtering
 
-Trade-off: CPU transcription is slower than cloud GPU APIs, but keeps clinical audio on self-hosted hardware at zero variable cost. Using PostgreSQL as the Layer 2 queue avoids running another broker while keeping trigger updates and queueing inside the same database transaction.
+The worker runs `faster-whisper` locally on CPU with Silero VAD and deterministic cleanup of common phantom phrases generated during silent stretches.
+
+Trade-off: CPU transcription is slower than paid cloud GPU APIs, but keeps clinical audio on self-hosted hardware with zero variable cost.
 
 #### Three-level PostgreSQL RLS isolation
 
-RLS policies enforce tenant, clinic, and assigned-clinician boundaries. Chart Q&A requests (`pedidos_ia`) are visible only to the clinician who asked and only while they retain access to that patient.
+RLS policies isolate records by tenant, clinic, and assigned clinician. Chart queries stay visible only to the clinician who asked and only while they retain access to that patient.
 
-### Production vs. in testing
+### What is live
 
-In production (initial clinical testing):
-- Layer 1 live on Coolify + Cloudflare Tunnel: WhatsApp intake via RabbitMQ, local faster-whisper transcription, isolated clinical structuring by specialty skill, exact patient matching, and review in the FastAPI/Jinja2 web panel.
-
-In testing (complete on a local feature branch, pending final review before release):
-- Full Layer 2: trigger-driven async history consolidation, pre-session summary card, clinical alerts, draft clinical reports, and date-cited chart Q&A.
-- Future reception and scheduling module planned to connect with this service.
+- In an initial pilot with health professionals at [evolucao.antonyandrade.com.br](https://evolucao.antonyandrade.com.br).
+- WhatsApp voice and text intake over RabbitMQ and local `faster-whisper` transcription.
+- Isolated clinical structuring by specialty template, exact patient matching, and a FastAPI/Jinja2 web panel for review and approval.
